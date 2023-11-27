@@ -10,3 +10,6 @@ Presentation "BI Team Presentation Midway" shows the team's presentation to the 
 
 ##### Final Presentation & Report
 The final presentation and report are the final deliverables for the project. The report is a document detailing the descriptions, code, and visualizations for the project. The final presentation was presented to the class and professor as a final in-class deliverable.
+
+##### Tableau
+The mid-way and final tableau projects are attached, using the clean pak wheels data set.
