@@ -13,3 +13,6 @@ The final presentation and report are the final deliverables for the project. Th
 
 ##### Tableau
 The mid-way and final tableau projects are attached, using the clean pak wheels data set.
+
+##### Final R RMD File - PDF - HTML
+There are multiple viewing options for the final R workbook. PDF and HTML have all outputs and visualizations needed without downloading the actual RMD file. 
