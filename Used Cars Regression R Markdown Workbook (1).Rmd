@@ -1,0 +1,453 @@
+---
+title: "R Notebook"
+output:
+  html_document:
+    df_print: paged
+---
+
+# Used Car Regressions
+
+Load Tools for Project
+
+```{r}
+library(dplyr)
+library(ggplot2)
+library(tidyverse)
+library(fastDummies)
+library(caret)
+library(AER)
+library(estimatr)
+library(Hmisc)
+library(glmnet)
+library(caTools)
+```
+
+Load Data
+
+```{r}
+car <- read.csv('Clean Data_pakwheels.csv')
+```
+
+Show Data Frame
+
+```{r}
+car
+```
+
+Drop NA's
+
+```{r}
+car%>%
+  mutate(drop_na(car))
+```
+
+Drop all rows that are not Punjab Region, for simplification of model
+
+```{r}
+car_2 <-car%>% 
+  filter(., Location %in% c('Punjab'))
+```
+
+Show Car2 data frame
+
+```{r}
+car_2
+```
+
+Mutate car2 to car3 for mutations of data
+
+```{r}
+car_3 <- car_2 %>%
+  
+  #group data by decade
+  
+  mutate(decade_1 = case_when( Model.Year >= '1990' & Model.Year <= '2000' ~ 1,Model.Year >= '2001' ~ 0 ))%>%
+  mutate(decade_2 = case_when( Model.Year >= '2001' & Model.Year <= '2010' ~ 1,Model.Year >= '2011'|Model.Year < '2001'~0))%>%
+  mutate(decade_3 = case_when( Model.Year >='2011' & Model.Year <= '2019' ~ 1, Model.Year < '2011'|Model.Year > '2019'~0))%>%
+  
+  
+  
+  #group data by manufacturing location
+  
+  mutate(East_asia = case_when(Company.Name == 'Toyota'
+                               |Company.Name == 'Honda'
+                               |Company.Name == 'Daihatsu'
+                               |Company.Name == 'Nissan'
+                               |Company.Name =='Mitsubishi'
+                               |Company.Name == 'Hyundai'
+                               |Company.Name == 'FAW' 
+                               |Company.Name == 'Suzuki' ~ 1,
+                               
+                               Company.Name != 'Toyota'
+                               |Company.Name !='Honda'
+                               |Company.Name !='Daihatsu'
+                               |Company.Name !='Nissan'
+                               |Company.Name !='Hyundai'
+                               |Company.Name !='Suzuki'
+                               |Company.Name != 'Mitsubishi' ~0 ))%>%
+  
+  mutate(german = case_when(Company.Name == 'Audi'
+                               |Company.Name=='Mercedes'
+                               |Company.Name=='BMW'~ 1, 
+                            
+                               Company.Name !='Audi'
+                               |Company.Name !='Mercedes'
+                               |Company.Name !='BMW' ~0))%>%   
+  
+  
+  
+  #create a dummy for transmission type
+  
+  mutate(tran_dum = case_when(Transmission.Type =="Manual" ~ 0, Transmission.Type =="Automatic" ~ 1))%>% 
+  
+  
+  
+  #create dummies for engine type, hybrid and diesel 
+  
+  mutate(Engine_num = case_when(Engine.Type== 'Petrol'| Engine.Type=='Hybrid'~ 1, Engine.Type=='Diesel'~ 0))%>%
+  
+  
+  
+  #Local vehicles serve as the baseline
+  
+  mutate(Assembly_num =case_when(Assembly == 'Local' ~ 0, Assembly == 'Imported' ~ 1))%>%
+  
+  
+  
+  #Control for body type
+  
+  mutate(dummy_cols(., select_columns ='Body.Type'))%>%
+  
+  
+  
+  #Control for color, separated in three categories
+  
+  mutate(.,Color_num = case_when(Color=='Black'~ 'Black', Color =='White'~ 'White', Color!='Black'|Color!='White' ~ 'Other'))%>%
+  
+  mutate((dummy_cols(.,select_columns = 'Color_num')))%>%
+  
+  
+  
+  #Convert price into USD for context (this might change according to the audience)
+  #Conversion on November 25th 2023 is 83.31 rupees to 1 dollar
+  
+  mutate(USD = Price/83.31)%>% 
+
+  
+  
+  #Select your variables that you want 
+  
+  select(.,East_asia, german, Mileage, decade_1,decade_2,decade_3, Engine.Capacity,tran_dum:Body.Type_Van,Color_num_Black:USD) 
+
+
+```
+
+See relationship and check for multi-collinearity & Relationship with Target Variable
+
+```{r}
+cor_check <- cor(car_3)
+#cor_check
+```
+
+```{r}
+palette = colorRampPalette(c("green", "white", "red")) (20)
+heatmap(x = cor_check, col = palette, symm = TRUE)
+```
+
+```{r}
+library(corrplot)
+corrplot(cor_check)
+```
+
+Run a simple model of price on the variable with the highest correlation
+
+```{r}
+base <- lm(USD ~ Engine.Capacity, car_3)
+summary(base)
+```
+
+Run Regression based on selected features (baseline model)
+
+```{r}
+mult_reg <- lm(USD~ Engine.Capacity + Mileage + tran_dum + Engine_num + Color_num_Other + Color_num_White + Body.Type_SUV + Body.Type_Hatchback + `Body.Type_Cross Over`+ Assembly_num, car_3)
+
+summary(mult_reg)
+```
+
+Lasso for feature selection
+
+```{r}
+model_lasso <- train(USD ~ .,
+               data = car_3, 
+               method = "glmnet",
+               tuneGrid = data.frame(alpha=1, 
+                                     lambda=seq(0.0000,1))) 
+model_lasso
+```
+
+Predicting car price based on our model Train and Testing Split for generalization
+
+```{r}
+
+set.seed(12L)
+trainIndex <- createDataPartition(car_3$USD, 
+                                  p = 0.8, 
+                                  list = FALSE, 
+                                  times = 1) 
+car_3_train <- car_3[trainIndex, ] 
+car_3_test <- car_3[-trainIndex, ] 
+```
+
+```{r}
+mult_reg_train <- lm(USD~ Engine.Capacity + Mileage + tran_dum + Engine_num
++Color_num_Black + Color_num_White + Body.Type_SUV + Body.Type_Hatchback + Body.Type_Sedan+
++ Body.Type_Van + East_asia + decade_2 + decade_3+ Assembly_num, data=car_3_train)
+summary(mult_reg_train)
+
+#check residuals
+res <- resid(mult_reg_train)
+plot(fitted(mult_reg_train), res)
+
+##predicting with multiple regression
+
+pred_mult <- predict(mult_reg_train, car_3_test)
+#pred_mult
+postResample(pred = pred_mult, car_3_test$USD)
+#lets improve with a lasso regression
+model_lasso <- train(USD ~ .,
+               data = car_3_train, 
+               method = "glmnet",
+               
+               tuneGrid = data.frame(alpha=1, 
+                                     lambda=seq(0.0001,1))) 
+model_lasso
+#summary(model_lasso)
+#Summary doesn't work for advanced models
+
+#model_2 <-train(USD~., car_3_train)
+```
+
+Now predict outcomes in test set
+
+```{r}
+p <- predict(model_lasso, car_3_test, type = 'raw')
+postResample(pred=p, obs= car_3_test$USD)
+#RMSE(p)
+paste("MSE: ", mean((p - car_3_test$USD)^2))
+paste("RMSE: ", sqrt(mean((p - car_3_test$USD)^2)))
+
+# add predictions to initial dataset
+#c_test$pred_churn <- p
+```
+
+Preparing data for Decision Trees and Random Forests
+
+```{r}
+library(rpart)
+library(rpart.plot)
+library(randomForest)
+
+#print(car_3)
+
+car_3 <- car_3 %>% rename(Body.Type_CrossOver = 'Body.Type_Cross Over')
+car_3 <- car_3 %>% rename(Body.Type_MiniVan = 'Body.Type_Mini Van')
+car_3 <- car_3 %>% rename(Price = USD)
+```
+
+Decision Trees
+
+```{r}
+#Decision tree with every feature. A little messy
+decision_tree_model <- rpart(Price ~ ., data = car_3, method = "anova")
+
+plot(decision_tree_model)
+text(decision_tree_model, use.n = TRUE)
+
+
+
+#This tree only is using three main features
+decision_tree_model <- rpart(Price ~ Engine.Capacity + Mileage + tran_dum, data = car_3, method = "anova")
+
+plot(decision_tree_model)
+text(decision_tree_model, use.n = TRUE)
+```
+
+Random Forests:
+
+The first RF model we ran was a regular one with all the features included. I tried to run it with certain features omitted, but it would return a higher RMSE each time.
+
+```{r}
+
+#Regular RF
+set.seed(123)  # reproducibility
+# Splitting the data into training and test sets
+train_indices <- sample(1:nrow(car_3), 0.8 * nrow(car_3))
+train_data <- car_3[train_indices, ]
+test_data <- car_3[-train_indices, ]
+
+
+# Fit model on training data
+fitted_model <- randomForest(Price ~ ., data = train_data, ntree = 500)
+
+
+# Predict on test data
+predictions <- predict(fitted_model, test_data)
+
+# Calculate MSE
+results <- data.frame(predictions, test_data$Price)
+results$Difference = abs(results$predictions - results$test_data.Price)
+print("Predictions for RF with all variables included")
+head(results)
+paste("MSE: ", mean((results$predictions - results$test_data.Price)^2))
+paste("RMSE: ", sqrt(mean((results$predictions - results$test_data.Price)^2)))
+paste("R-Squared: ", cor(results$test_data.Price, results$predictions)^2)
+  
+
+
+#Tried running RF with select features, but no combination was nearly as good as including all features
+#fitted_model <- randomForest(Price ~ East_asia + german + Mileage +  Engine.Capacity + tran_dum + Engine_num +
+#                               Assembly_num + Body.Type_CrossOver + Body.Type_Hatchback + Body.Type_MiniVan + Body.Type_Sedan + Body.Type_SUV + Body.Type_Van + 
+#                               Color_num_Black + Color_num_Other + Color_num_White, data = train_data, ntree = 500)
+
+
+# Predict on test data
+#predictions <- predict(fitted_model, test_data)
+
+#results <- data.frame(predictions, test_data$Price)
+#print("Predictions for RF with all variables included")
+#head(results)
+#paste("MSE: ", mean((results$predictions - results$test_data.Price)^2))
+#paste("RMSE: ", sqrt(mean((results$predictions - results$test_data.Price)^2)))
+
+```
+
+Next I tried to focus on outliers, which began with limiting the lowest-end cars, however this had no significant change
+
+```{r}
+#Removing the lowest end cars
+car_4 <- subset(car_3, Price >= 8000)
+
+# Splitting the data into training and test sets
+train_indices <- sample(1:nrow(car_4), 0.8 * nrow(car_4))
+train_data <- car_4[train_indices, ]
+test_data <- car_4[-train_indices, ]
+
+
+# Fit model on training data
+fitted_model <- randomForest(Price ~ ., data = train_data, ntree = 500)
+
+# Predict on test data
+predictions <- predict(fitted_model, test_data)
+
+# Calculate MSE
+results <- data.frame(predictions, test_data$Price)
+print("Predictions for RF with outliers removed")
+head(results)
+paste("MSE: ", mean((results$predictions - results$test_data.Price)^2))
+paste("RMSE: ", sqrt(mean((results$predictions - results$test_data.Price)^2)))
+paste("R-Squared: ", cor(results$test_data.Price, results$predictions)^2)
+
+
+```
+
+When I did the opposite and left out observations with an actual price over \$60,000, it significantly improved and I had the best RMSE by far (Around 3400, which represents the model being off by an average of 3400 each time, which isn't bad with it having to do with car prices)
+
+```{r}
+#Removing the highest end cars (Best Model)
+car_4 <- subset(car_3, Price <= 60000)
+
+# Splitting the data into training and test sets
+train_indices <- sample(1:nrow(car_4), 0.8 * nrow(car_4))
+train_data <- car_4[train_indices, ]
+test_data <- car_4[-train_indices, ]
+
+
+# Fit model on training data
+fitted_model <- randomForest(Price ~ ., data = train_data, ntree = 500)
+
+# Predict on test data
+predictions <- predict(fitted_model, test_data)
+
+# Calculate MSE
+results <- data.frame(predictions, test_data$Price)
+print("Predictions for RF with outliers removed")
+head(results)
+paste("MSE: ", mean((results$predictions - results$test_data.Price)^2))
+paste("RMSE: ", sqrt(mean((results$predictions - results$test_data.Price)^2)))
+paste("R-Squared: ", cor(results$test_data.Price, results$predictions)^2)
+
+```
+
+The final alterations I tried were with limiting the number of trees in the model and this had a slight impact
+
+```{r}
+# Reducing number of trees to 128
+# Splitting the data into training and test sets
+train_indices <- sample(1:nrow(car_3), 0.8 * nrow(car_3))
+train_data <- car_3[train_indices, ]
+test_data <- car_3[-train_indices, ]
+
+
+# Fit model on training data
+fitted_model <- randomForest(Price ~ ., data = train_data, ntree = 128)
+
+# Predict on test data
+predictions <- predict(fitted_model, test_data)
+
+# Calculate MSE
+results <- data.frame(predictions, test_data$Price)
+print("Predictions for RF with all variables included and less trees (128)")
+head(results)
+paste("MSE: ", mean((results$predictions - results$test_data.Price)^2))
+paste("RMSE: ", sqrt(mean((results$predictions - results$test_data.Price)^2)))
+paste("R-Squared: ", cor(results$test_data.Price, results$predictions)^2)
+```
+
+```{r}
+#Tried many different number of trees, did not make major changes, 128 seemed optimal
+# Splitting the data into training and test sets
+train_indices <- sample(1:nrow(car_3), 0.8 * nrow(car_3))
+train_data <- car_3[train_indices, ]
+test_data <- car_3[-train_indices, ]
+
+
+# Fit model on training data
+fitted_model <- randomForest(Price ~ ., data = train_data, ntree = 100)
+
+
+# Predict on test data
+predictions <- predict(fitted_model, test_data)
+
+# Calculate MSE
+results <- data.frame(predictions, test_data$Price)
+print("Predictions for RF with all variables included")
+head(results)
+paste("MSE: ", mean((results$predictions - results$test_data.Price)^2))
+paste("RMSE: ", sqrt(mean((results$predictions - results$test_data.Price)^2)))
+paste("R-Squared: ", cor(results$test_data.Price, results$predictions)^2)
+```
+
+```{r}
+# Less Trees + select features
+# Splitting the data into training and test sets
+train_indices <- sample(1:nrow(car_3), 0.8 * nrow(car_3))
+train_data <- car_3[train_indices, ]
+test_data <- car_3[-train_indices, ]
+
+
+# Fit model on training data
+fitted_model <- randomForest(Price ~ Engine.Capacity + Mileage + tran_dum, data = train_data, ntree = 128)
+
+
+# Predict on test data
+predictions <- predict(fitted_model, test_data)
+
+# Calculate MSE
+results <- data.frame(predictions, test_data$Price)
+print("Predictions for RF with three variables included (Engine Capacity, Mileage, Transmission) and less trees (128)")
+head(results)
+paste("MSE: ", mean((results$predictions - results$test_data.Price)^2))
+paste("RMSE: ", sqrt(mean((results$predictions - results$test_data.Price)^2)))
+paste("R-Squared: ", cor(results$test_data.Price, results$predictions)^2)
+
+```
